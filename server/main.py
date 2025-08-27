@@ -1,7 +1,6 @@
 import os
 import shutil
 import subprocess
-import threading
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -181,43 +180,34 @@ def download_artifacts(experiment_name: str):
         media_type="application/zip"
     )
 
-
 @app.websocket("/ws/logs/container/{container_id}")
 async def websocket_logs(ws: WebSocket, container_id: str):
     await ws.accept()
-    proc = subprocess.Popen(
-        ["docker", "logs", "-f", container_id],
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+
+    proc = await asyncio.create_subprocess_exec(
+        "docker", "logs", "-f", container_id,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
     )
-    stop = threading.Event()
-    loop = asyncio.get_running_loop()
-
-    def forward():
-        for ln in proc.stdout:
-            if stop.is_set():
-                break
-            asyncio.run_coroutine_threadsafe(ws.send_text(ln.rstrip("\n")), loop)
-        proc.stdout.close()
-
-    thread = threading.Thread(target=forward, daemon=True)
-    thread.start()
-    deadline = time.time() + 600
 
     try:
-        while True:
-            try:
-                await asyncio.wait_for(ws.receive_text(), timeout=1.0)
-            except asyncio.TimeoutError:
-                pass
-            if time.time() >= deadline:
-                await ws.send_text("[server] session timeout after 10 minutes")
-                break
+        async for line in proc.stdout:
+            if line:
+                await ws.send_text(line.decode().rstrip())
+
     except WebSocketDisconnect:
+        # Client disconnected, just exit loop
         pass
     finally:
-        stop.set()
-        proc.terminate()
-        thread.join()
+        # Instead of terminate(), just wait for the process to finish
+        if proc.returncode is None:
+            try:
+                proc.kill()  # safer than terminate() on async subprocess
+            except ProcessLookupError:
+                pass
+        await proc.wait()
+
+        # Close WebSocket safely
         try:
             await ws.close()
         except RuntimeError:
