@@ -3,18 +3,18 @@ import shutil
 import subprocess
 import shlex
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Iterator
+from typing import List, Optional, Tuple, Iterator
 import asyncio
 
 import uvicorn
-from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 
-# --- Experiment Models ---
+# --- Models ---
 class Experiment(BaseModel):
     name: str
     ref: str
@@ -23,6 +23,11 @@ class Experiment(BaseModel):
     artifacts_path: str = ""
 
 
+class NameRequest(BaseModel):
+    experiment_name: str
+
+
+# --- Experiment configs ---
 EXPERIMENTS: List[Experiment] = [
     Experiment(
         name="analysing_pii_leakage",
@@ -44,14 +49,12 @@ EXPERIMENTS: List[Experiment] = [
     ),
 ]
 
-
 # --- Paths ---
 BASE_PATH = Path(os.path.abspath(".."))
 LOGS_PATH = Path("./var/log/docker_service")
 LOGS_PATH.mkdir(parents=True, exist_ok=True)
 
-
-# --- FastAPI App ---
+# --- FastAPI ---
 app = FastAPI(title="Docker Experiment Manager")
 app.add_middleware(
     CORSMiddleware,
@@ -63,12 +66,7 @@ app.add_middleware(
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
-# --- Request Models ---
-class NameRequest(BaseModel):
-    experiment_name: str
-
-
-# --- Helper Functions ---
+# --- Helpers ---
 def _get_config(name: str) -> Experiment:
     for cfg in EXPERIMENTS:
         if cfg.name == name:
@@ -79,7 +77,7 @@ def _get_config(name: str) -> Experiment:
 def _exp_paths(name: str) -> Tuple[Experiment, Path, Optional[Path]]:
     cfg = _get_config(name)
     exp_dir = BASE_PATH / cfg.name
-    art_rel = cfg.artifacts_path.strip()
+    art_rel = cfg.artifacts_path.strip() or None
     art_dir = exp_dir / art_rel if art_rel else None
     return cfg, exp_dir, art_dir
 
@@ -106,6 +104,14 @@ def _container_name(name: str) -> str:
     return name.replace("_", "-") + "-container"
 
 
+def _remove_container_if_exists(cname: str):
+    try:
+        _run_cli(["docker", "inspect", cname])
+        _run_cli(["docker", "rm", "-f", cname])
+    except HTTPException:
+        pass
+
+
 def _stream_process(cmd: List[str], cwd: Optional[Path] = None) -> Iterator[str]:
     proc = subprocess.Popen(
         cmd,
@@ -117,10 +123,11 @@ def _stream_process(cmd: List[str], cwd: Optional[Path] = None) -> Iterator[str]
     for line in proc.stdout:
         yield line
     proc.wait()
+    yield "[build complete]"  # ensure consistent final message
 
 
 def _dockerfile_for_arch(exp_dir: Path) -> Path:
-    dockerfile_name = "Dockerfile.arm64" if subprocess.os.uname().machine == "aarch64" else "Dockerfile"
+    dockerfile_name = "Dockerfile.arm64" if os.uname().machine == "aarch64" else "Dockerfile"
     dockerfile_path = exp_dir / dockerfile_name
     if not dockerfile_path.exists():
         raise HTTPException(status_code=404, detail=f"{dockerfile_name} not found")
@@ -158,13 +165,7 @@ def build_image(req: NameRequest):
 def run_container(req: NameRequest):
     cfg, exp_dir, _ = _exp_paths(req.experiment_name)
     cname = _container_name(cfg.name)
-
-    # Remove existing container if present
-    try:
-        _run_cli(["docker", "inspect", cname])
-        _run_cli(["docker", "rm", "-f", cname])
-    except HTTPException:
-        pass
+    _remove_container_if_exists(cname)
 
     tag = cfg.name.lower().replace("_", "-")
     cmd = [
@@ -184,21 +185,19 @@ def run_container(req: NameRequest):
 @app.post("/remove", summary="Remove container for experiment")
 def remove_container(req: NameRequest):
     cname = _container_name(req.experiment_name)
-    _run_cli(["docker", "rm", "-f", cname])
+    _remove_container_if_exists(cname)
     return {"removed": cname}
 
 
 @app.get("/artifacts/{experiment_name}", summary="Download experiment artifacts")
 def download_artifacts(experiment_name: str):
     cfg, _, art_dir = _exp_paths(experiment_name)
-
-    if cfg.artifacts_path.strip() == "":
+    if not art_dir:
         raise HTTPException(
             status_code=404,
             detail=f"No artifacts_path configured for experiment '{experiment_name}'"
         )
-
-    if not art_dir or not art_dir.exists() or not art_dir.is_dir():
+    if not art_dir.exists() or not art_dir.is_dir():
         raise HTTPException(
             status_code=404,
             detail=f"Artifacts for experiment '{experiment_name}' not found"
@@ -215,7 +214,6 @@ def download_artifacts(experiment_name: str):
 @app.websocket("/ws/logs/container/{container_id}")
 async def websocket_logs(ws: WebSocket, container_id: str):
     await ws.accept()
-
     proc = await asyncio.create_subprocess_exec(
         "docker", "logs", "-f", container_id,
         stdout=asyncio.subprocess.PIPE,
@@ -235,7 +233,6 @@ async def websocket_logs(ws: WebSocket, container_id: str):
             except ProcessLookupError:
                 pass
         await proc.wait()
-
         try:
             await ws.close()
         except RuntimeError:
