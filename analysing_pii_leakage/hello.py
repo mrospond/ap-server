@@ -1,6 +1,8 @@
-import time
+import sys
 import platform
+import time
 
 while True:
-    print(f"Hello from {platform.machine()}!")
+    # sys.argv[0] is the script name, sys.argv[1:] are the arguments
+    print(f"Hello from {platform.machine()}! Params: {sys.argv[1:]}")
     time.sleep(1)

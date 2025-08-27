@@ -19,14 +19,14 @@ EXPERIMENTS: List[Dict[str, str]] = [
         "experimentName": "analysing_pii_leakage",
         "ref": "https://arxiv.org/abs/2302.00539",
         "code": "https://github.com/microsoft/analysing_pii_leakage",
-        "entrypoint": "hello.py",
+        "entrypoint": "hello.py hello world 123",
         "artifacts_path": ""
     },
     {
         "experimentName": "LM_PersonalInfoLeak",
         "ref": "https://arxiv.org/abs/2205.12628",
         "code": "https://github.com/jeffhj/LM_PersonalInfoLeak",
-        "entrypoint": "python main.py",
+        "entrypoint": "main.py",
         "artifacts_path": ""
     },
     {
