@@ -8,7 +8,7 @@
 SERVER ?= http://localhost:8000
 JSON_HEADER = -H "Content-Type: application/json"
 
-.PHONY: help build-% run-% remove-% logs-%
+.PHONY: help get build-% run-% remove-% logs-%
 
 help:
 	@echo "Usage:"
