@@ -1,6 +1,5 @@
 import os
 import shutil
-import signal
 import subprocess
 import threading
 import time
@@ -162,13 +161,19 @@ def remove_container(req: NameRequest):
 def download_artifacts(experiment_name: str):
     cfg, _, art_dir = _exp_paths(experiment_name)
 
+    # Immediately return 404 if no artifacts_path is configured
+    if cfg.get("artifacts_path", "").strip() == "":
+        raise HTTPException(
+            status_code=404,
+            detail=f"No artifacts_path configured for experiment '{experiment_name}'"
+        )
+
     if not art_dir or not art_dir.exists() or not art_dir.is_dir():
         raise HTTPException(
             status_code=404,
-            detail=f"No artifacts found for experiment '{experiment_name}'"
+            detail=f"Artifacts for experiment '{experiment_name}' not found"
         )
 
-    # Create a zip file alongside the artifacts directory
     zip_path = shutil.make_archive(str(art_dir), 'zip', root_dir=str(art_dir))
     return FileResponse(
         path=zip_path,
