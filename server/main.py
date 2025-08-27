@@ -159,13 +159,16 @@ def remove_container(req: NameRequest):
 
 
 @app.get("/artifacts/{experiment_name}", summary="Download experiment artifacts")
-def download_artifacts(paths=Depends(lambda experiment_name: _exp_paths(experiment_name))):
-    cfg, _, art_dir = paths
-    if not art_dir:
-        raise HTTPException(status_code=404, detail="No artifacts_path configured")
-    if not art_dir.exists() or not art_dir.is_dir():
-        raise HTTPException(status_code=404, detail=f"Artifacts for '{cfg['experimentName']}' not found")
+def download_artifacts(experiment_name: str):
+    cfg, _, art_dir = _exp_paths(experiment_name)
 
+    if not art_dir or not art_dir.exists() or not art_dir.is_dir():
+        raise HTTPException(
+            status_code=404,
+            detail=f"No artifacts found for experiment '{experiment_name}'"
+        )
+
+    # Create a zip file alongside the artifacts directory
     zip_path = shutil.make_archive(str(art_dir), 'zip', root_dir=str(art_dir))
     return FileResponse(
         path=zip_path,
