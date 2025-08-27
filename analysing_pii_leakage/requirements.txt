@@ -1,11 +1,1 @@
-# Core dependencies
-torch>=1.10,<2.0
-transformers
-tqdm
-opacus
-datasets<=2.13.0
-numpy<2
-pyarrow<10.0.0
-# Git dependencies
-git+https://github.com/flairNLP/flair
-git+https://github.com/microsoft/dp-transformers.git@main#egg=dp_transformers
+numpy==1.26.4

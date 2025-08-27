@@ -1,5 +1,4 @@
-FROM alpine:3.22
+FROM busybox:1.36
 
-RUN echo "Architecture: $(uname -m)"
-
-CMD uname -m && sleep 3600
+# Run $(uname -m) every 5 seconds forever
+CMD sh -c "while true; do uname -m; sleep 2; done"

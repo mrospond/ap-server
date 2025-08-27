@@ -1,31 +1,118 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <title>Experiment Controller</title>
-    <style>
-        body { font-family: sans-serif; margin: 20px; }
-        select, button, input { margin: 5px; padding: 5px; }
-        #logs { white-space: pre-wrap; background: #111; color: #0f0; padding: 10px; height: 400px; overflow-y: scroll; display: none; }
-        #actionsSection { display: none; }
-    </style>
+  <meta charset="UTF-8"/>
+  <title>Docker Experiment Manager</title>
+  <style>
+    body { font-family: sans-serif; margin: 2em; }
+    .controls { margin-bottom: 1em; }
+    select, button { margin-right: 1em; padding: 0.5em; }
+    #output { white-space: pre; background: #f4f4f4; padding: 1em; height: 300px; overflow-y: scroll; }
+  </style>
 </head>
 <body>
-    <h1>Experiment Controller</h1>
+  <h1>Docker Experiment Manager</h1>
 
-    <div>
-        <label>Select Experiment:</label>
-        <select id="experimentSelect"></select>
-        <button onclick="startExperiment()">Start</button>
-        <button onclick="stopExperiment()">Force Stop</button>
-    </div>
+  <div class="controls">
+    <label for="expSelect">Experiment:</label>
+    <select id="expSelect"></select>
+    <button id="btnBuild">Build</button>
+    <button id="btnRun">Run</button>
+    <button id="btnRemove">Remove</button>
+    <button id="btnLogs">View Logs</button>
+  </div>
 
-    <div id="actionsSection">
-        <h2>Status: <span id="status">idle</span></h2>
-        <h2>Logs</h2>
-        <div id="logs"></div>
-    </div>
+  <h2>Output</h2>
+  <div id="output">Select an action to see output...</div>
 
-    <script src="main.js"></script>
+  <script>
+    const server = "http://localhost:8000";
+    const output = document.getElementById("output");
+    const expSelect = document.getElementById("expSelect");
+
+    function log(msg) {
+      output.textContent += msg + "\n";
+      output.scrollTop = output.scrollHeight;
+    }
+
+    // Load experiments
+    fetch(`${server}/experiments`)
+      .then(res => res.json())
+      .then(data => {
+        expSelect.innerHTML = data.experiments
+          .map(name => `<option value="${name}">${name}</option>`)
+          .join("");
+        log("Loaded experiments.");
+      })
+      .catch(err => log("Error loading experiments: " + err));
+
+    // JSON POST helper
+    function postJson(path, body) {
+      log(`POST ${path} ${JSON.stringify(body)}`);
+      return fetch(`${server}${path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      })
+      .then(res => res.json())
+      .then(json => {
+        log(JSON.stringify(json, null, 2));
+        return json;
+      })
+      .catch(err => log("Error: " + err));
+    }
+
+    // Build: stream text
+    function doBuild(exp) {
+      output.textContent = "";
+      log(`Streaming build logs for ${exp}...`);
+      fetch(`${server}/build`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ experiment_name: exp })
+      })
+      .then(res => {
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        function read() {
+          return reader.read().then(({ done, value }) => {
+            if (done) {
+              log("[build complete]");
+              return;
+            }
+            const chunk = decoder.decode(value, { stream: true });
+            log(chunk);
+            return read();
+          });
+        }
+        return read();
+      })
+      .catch(err => log("Build error: " + err));
+    }
+
+    document.getElementById("btnBuild").onclick = () => {
+      const exp = expSelect.value;
+      doBuild(exp);  // no JSON parsing on build
+    };
+
+    document.getElementById("btnRun").onclick = () => {
+      const exp = expSelect.value;
+      output.textContent = "";
+      postJson("/run", { experiment_name: exp });
+    };
+
+    document.getElementById("btnRemove").onclick = () => {
+      const exp = expSelect.value;
+      output.textContent = "";
+      postJson("/remove", { experiment_name: exp });
+    };
+
+    document.getElementById("btnLogs").onclick = () => {
+      const exp = expSelect.value;
+      const container = exp.replace(/_/g, "-") + "-container";
+      const wsUrl = `ws://${window.location.hostname}:8000/ws/logs/container/${container}`;
+      window.open(`logs.html?ws=${encodeURIComponent(wsUrl)}`, "_blank");
+    };
+  </script>
 </body>
 </html>

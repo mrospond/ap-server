@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Logs Viewer</title>
+  <style>
+    body { font-family: monospace; margin: 1em; white-space: pre; }
+    #logs { height: 90vh; overflow-y: scroll; background: #000; color: #0f0; padding: 1em; }
+  </style>
+</head>
+<body>
+  <h1>Live Logs</h1>
+  <div id="logs">Connecting…</div>
+  <script>
+    const params = new URLSearchParams(window.location.search)
+    const wsUrl = params.get("ws")
+    const logs = document.getElementById("logs")
+    logs.textContent = ""
+
+    const ws = new WebSocket(wsUrl)
+    ws.onopen = () => logs.textContent += "[WebSocket opened]\n"
+    ws.onmessage = evt => {
+      logs.textContent += evt.data + "\n"
+      logs.scrollTop = logs.scrollHeight
+    }
+    ws.onclose = () => logs.textContent += "[WebSocket closed]\n"
+    ws.onerror = e => logs.textContent += "[Error]\n"
+  </script>
+</body>
+</html>

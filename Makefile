@@ -12,10 +12,15 @@ JSON_HEADER = -H "Content-Type: application/json"
 
 help:
 	@echo "Usage:"
+	@echo "  make get"
 	@echo "  make build-<experiment_name>"
 	@echo "  make run-<experiment_name>"
 	@echo "  make remove-<experiment_name>"
 	@echo "  make logs-<experiment_name>"
+
+get:
+	@echo "Availavle experiments:"
+	curl -s $(SERVER)/experiments | jq
 
 build-%:
 	@echo "Building image for experiment '$*'..."
