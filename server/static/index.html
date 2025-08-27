@@ -5,30 +5,46 @@
   <title>Docker Experiment Manager</title>
   <style>
     body { font-family: sans-serif; margin: 2em; }
-    .controls { margin-bottom: 1em; }
-    select, button { margin-right: 1em; padding: 0.5em; }
-    #instructions { background: #eef; border: 1px solid #99c; padding: 1em; margin-bottom: 1em; }
-    #output { white-space: pre; background: #f4f4f4; padding: 1em; height: 300px; overflow-y: scroll; }
+    #instructions {
+      display: flex; gap: 1em;
+      background: #eef; border: 1px solid #99c; padding: 1em;
+    }
+    #instructions > div { flex: 1; }
+    #instructions ol { margin: 0; padding-left: 1.2em; }
+    #instructions p, #instructions li, #configPanel p {
+      font-size: 14px; margin: 0.2em 0;
+    }
     .status-ok { color: green; font-weight: bold; }
-    .status-error { color: red; font-weight: bold; }
+    .controls { margin: 1em 0; }
+    select, button { margin-right: 0.5em; padding: 0.5em; font-size: 14px; }
+    #output {
+      background: #f4f4f4; padding: 1em; height: 300px;
+      overflow-y: auto; white-space: pre; font-size: 14px;
+    }
+    .key { display: inline-block; width: 100px; }
   </style>
 </head>
 <body>
   <h1>Docker Experiment Manager</h1>
 
   <div id="instructions">
-    <p><strong>Usage Workflow:</strong></p>
-    <ol>
-      <li>Select an experiment from the dropdown.</li>
-      <li><span class="status-ok">Build</span> an image first by clicking <em>Build</em>.</li>
-      <li>Once build succeeds, click <em>Run</em> to start the container.</li>
-      <li>If <em>Run</em> returns no errors, you can inspect logs via <em>View Logs</em>.</li>
-      <li>Click <em>Download Artifacts</em> to fetch the zipped outputs for the selected experiment.</li>
-    </ol>
+    <div>
+      <p><strong>Usage Workflow:</strong></p>
+      <ol>
+        <li>Select an experiment from the dropdown.</li>
+        <li><span class="status-ok">Build</span> by clicking Build.</li>
+        <li>Once built, click Run.</li>
+        <li>View logs via View Logs.</li>
+        <li>Download artifacts via Download Artifacts.</li>
+      </ol>
+    </div>
+    <div id="configPanel">
+      <p><strong>Experiment Configuration:</strong></p>
+      <div id="expConfig">Select an experiment to view its config...</div>
+    </div>
   </div>
 
   <div class="controls">
-    <label for="expSelect">Experiment:</label>
     <select id="expSelect"></select>
     <button id="btnBuild">Build</button>
     <button id="btnRun">Run</button>
@@ -40,116 +56,6 @@
   <h2>Output</h2>
   <div id="output">Select an action to see output...</div>
 
-  <script>
-    const server = "http://localhost:8000";
-    const output = document.getElementById("output");
-    const expSelect = document.getElementById("expSelect");
-
-    function log(msg, status) {
-      const line = document.createElement("div");
-      if (status === "ok") line.classList.add("status-ok");
-      if (status === "error") line.classList.add("status-error");
-      line.textContent = msg;
-      output.appendChild(line);
-      output.scrollTop = output.scrollHeight;
-    }
-
-    // Load experiments
-    fetch(`${server}/experiments`)
-      .then(res => res.json())
-      .then(data => {
-        expSelect.innerHTML = data.experiments
-          .map(name => `<option value="${name}">${name}</option>`)
-          .join("");
-        log("Loaded experiments.", "ok");
-      })
-      .catch(err => log("Error loading experiments: " + err, "error"));
-
-    function postJson(path, body) {
-      log(`POST ${path} ${JSON.stringify(body)}`);
-      return fetch(`${server}${path}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body)
-      })
-      .then(async res => {
-        const text = await res.text();
-        try {
-          const json = JSON.parse(text);
-          log(`Success: ${JSON.stringify(json)}`, "ok");
-          return json;
-        } catch {
-          log(`Error response: ${text}`, "error");
-          throw new Error(text);
-        }
-      })
-      .catch(err => {
-        log("Error: " + err.message, "error");
-        throw err;
-      });
-    }
-
-    function doBuild(exp) {
-      output.textContent = "";
-      log(`Streaming build logs for ${exp}...`);
-      fetch(`${server}/build`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ experiment_name: exp })
-      })
-      .then(res => {
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        function read() {
-          return reader.read().then(({ done, value }) => {
-            if (done) {
-              log("[build complete]", "ok");
-              return;
-            }
-            const chunk = decoder.decode(value, { stream: true });
-            log(chunk.trim());
-            return read();
-          });
-        }
-        return read();
-      })
-      .catch(err => log("Build error: " + err.message, "error"));
-    }
-
-    document.getElementById("btnBuild").onclick = () => {
-      const exp = expSelect.value;
-      doBuild(exp);
-    };
-
-    document.getElementById("btnRun").onclick = () => {
-      const exp = expSelect.value;
-      output.textContent = "";
-      postJson("/run", { experiment_name: exp }).catch(() => {});
-    };
-
-    document.getElementById("btnRemove").onclick = () => {
-      const exp = expSelect.value;
-      output.textContent = "";
-      postJson("/remove", { experiment_name: exp }).catch(() => {});
-    };
-
-    document.getElementById("btnLogs").onclick = () => {
-      const exp = expSelect.value;
-      const container = exp.replace(/_/g, "-") + "-container";
-      const wsUrl = `ws://${window.location.hostname}:8000/ws/logs/container/${container}`;
-      window.open(`logs.html?ws=${encodeURIComponent(wsUrl)}`, "_blank");
-    };
-
-    document.getElementById("btnDownload").onclick = () => {
-      const exp = expSelect.value;
-      const url = `${server}/artifacts/${encodeURIComponent(exp)}`;
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${exp}-artifacts.zip`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-    };
-  </script>
+  <script src="main.js"></script>
 </body>
 </html>
