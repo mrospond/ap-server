@@ -1,17 +1,19 @@
 import os
+import shutil
 import signal
 import subprocess
-import shutil
+import threading
+import time
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
+import asyncio
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-import asyncio, threading, time, platform
 
 # --- Experiment Configuration ---
 EXPERIMENTS: List[Dict[str, str]] = [
@@ -38,23 +40,66 @@ EXPERIMENTS: List[Dict[str, str]] = [
     }
 ]
 
-EXPERIMENTS_PATH = Path(os.path.abspath(".."))
+BASE_PATH = Path(os.path.abspath(".."))
 LOGS_PATH = Path("./var/log/docker_service")
 LOGS_PATH.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title="Docker Experiment Manager")
-
-# Enable CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=["*"], allow_credentials=True,
+    allow_methods=["*"], allow_headers=["*"],
 )
-
-# Serve static files
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+
+class NameRequest(BaseModel):
+    experiment_name: str
+
+
+def _get_config(name: str) -> Dict[str, str]:
+    for cfg in EXPERIMENTS:
+        if cfg["experimentName"] == name:
+            return cfg
+    raise HTTPException(status_code=404, detail=f"Experiment '{name}' not found")
+
+
+def _exp_paths(name: str) -> Tuple[Dict[str, str], Path, Path]:
+    cfg = _get_config(name)
+    exp_dir = BASE_PATH / cfg["experimentName"]
+    art_rel = cfg.get("artifacts_path", "").strip()
+    art_dir = exp_dir / art_rel if art_rel else None
+    return cfg, exp_dir, art_dir  # art_dir may be None
+
+
+def _run_cli(cmd: List[str], cwd: Optional[Path] = None, timeout: Optional[int] = None) -> str:
+    try:
+        res = subprocess.run(
+            cmd, cwd=str(cwd) if cwd else None,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            check=True, text=True, timeout=timeout
+        )
+        return res.stdout
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(status_code=500, detail=e.stdout)
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="Command timed out")
+
+
+def _container_name(name: str) -> str:
+    return name.replace("_", "-") + "-container"
+
+
+def _stream_process(cmd: List[str], cwd: Optional[Path] = None):
+    proc = subprocess.Popen(
+        cmd, cwd=str(cwd) if cwd else None,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+    )
+    def generator():
+        for line in proc.stdout:
+            yield line
+        proc.wait()
+    return generator()
 
 
 @app.get("/", include_in_schema=False)
@@ -67,39 +112,6 @@ def logs_page():
     return FileResponse("static/logs.html")
 
 
-class NameRequest(BaseModel):
-    experiment_name: str
-
-
-def _get_experiment_config(name: str) -> Dict[str, str]:
-    for cfg in EXPERIMENTS:
-        if cfg["experimentName"] == name:
-            return cfg
-    raise HTTPException(status_code=404, detail=f"Experiment '{name}' not found")
-
-
-def _run_cli(cmd: List[str], cwd: Optional[Path] = None, timeout: Optional[int] = None) -> str:
-    try:
-        proc = subprocess.run(
-            cmd,
-            cwd=str(cwd) if cwd else None,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            check=True,
-            text=True,
-            timeout=timeout
-        )
-        return proc.stdout
-    except subprocess.CalledProcessError as e:
-        raise HTTPException(status_code=500, detail=e.stdout)
-    except subprocess.TimeoutExpired:
-        raise HTTPException(status_code=504, detail="Command timed out")
-
-
-def _container_name(name: str) -> str:
-    return name.replace("_", "-") + "-container"
-
-
 @app.get("/experiments", summary="List all experiments")
 def list_experiments():
     return {"experiments": [cfg["experimentName"] for cfg in EXPERIMENTS]}
@@ -107,58 +119,34 @@ def list_experiments():
 
 @app.post("/build", summary="Build Docker image (streaming logs)")
 def build_image(req: NameRequest):
-    dockerfile = "Dockerfile"
-    if platform.machine() == "aarch64":
-        dockerfile += ".arm64"
-    cfg = _get_experiment_config(req.experiment_name)
-    exp_dir = EXPERIMENTS_PATH / cfg["experimentName"]
-    if not (exp_dir / dockerfile).exists():
+    cfg, exp_dir, _ = _exp_paths(req.experiment_name)
+    dockerfile = "Dockerfile.arm64" if subprocess.os.uname().machine == "aarch64" else "Dockerfile"
+    df = exp_dir / dockerfile
+    if not df.exists():
         raise HTTPException(status_code=404, detail=f"{dockerfile} not found")
     tag = cfg["experimentName"].lower().replace("_", "-")
-    proc = subprocess.Popen(
-        ["docker", "build", "-t", tag, "-f", dockerfile, "."],
-        cwd=str(exp_dir),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True
+    return StreamingResponse(
+        _stream_process(["docker", "build", "-t", tag, "-f", dockerfile, "."], cwd=exp_dir),
+        media_type="text/plain"
     )
-
-    def log_stream():
-        for line in proc.stdout:
-            yield line
-        proc.wait()
-
-    return StreamingResponse(log_stream(), media_type="text/plain")
 
 
 @app.post("/run", summary="Run container for experiment")
 def run_container(req: NameRequest):
-    cfg = _get_experiment_config(req.experiment_name)
-    exp_dir = EXPERIMENTS_PATH / cfg["experimentName"]
-    tag = cfg["experimentName"].lower().replace("_", "-")
+    cfg, exp_dir, _ = _exp_paths(req.experiment_name)
     cname = _container_name(cfg["experimentName"])
-
-    # Remove existing container if any
+    # remove existing
     try:
         _run_cli(["docker", "inspect", cname])
         _run_cli(["docker", "rm", "-f", cname])
     except HTTPException:
         pass
 
-    volume_spec = f"{exp_dir}:/app"
-    workdir = "/app"
-    cmd = [
-        "docker", "run",
-        "--name", cname,
-        "--detach",
-        "--volume", volume_spec,
-        "--workdir", workdir,
-        tag
-    ]
-    entry = cfg.get("entrypoint", "").strip()
-    if entry:
-        cmd += entry.split()
-
+    tag = cfg["experimentName"].lower().replace("_", "-")
+    cmd = ["docker", "run", "--name", cname, "--detach",
+           "--volume", f"{exp_dir}:/app", "--workdir", "/app", tag]
+    if cfg.get("entrypoint"):
+        cmd += cfg["entrypoint"].split()
     cid = _run_cli(cmd).strip()
     return {"container_id": cid}
 
@@ -171,50 +159,41 @@ def remove_container(req: NameRequest):
 
 
 @app.get("/artifacts/{experiment_name}", summary="Download experiment artifacts")
-def download_artifacts(experiment_name: str):
-    cfg = _get_experiment_config(experiment_name)
-    artifact_rel = cfg.get("artifacts_path", "").strip()
-    if not artifact_rel:
+def download_artifacts(paths=Depends(lambda experiment_name: _exp_paths(experiment_name))):
+    cfg, _, art_dir = paths
+    if not art_dir:
         raise HTTPException(status_code=404, detail="No artifacts_path configured")
+    if not art_dir.exists() or not art_dir.is_dir():
+        raise HTTPException(status_code=404, detail=f"Artifacts for '{cfg['experimentName']}' not found")
 
-    # **Correctly resolve artifacts directory under each experiment**
-    artifact_dir = EXPERIMENTS_PATH / cfg["experimentName"] / artifact_rel
-    if not artifact_dir.exists() or not artifact_dir.is_dir():
-        raise HTTPException(status_code=404, detail=f"Artifacts for '{experiment_name}' not found")
-
-    # Create zip file alongside the directory
-    zip_path = artifact_dir.with_suffix(".zip")
-    shutil.make_archive(str(artifact_dir), 'zip', root_dir=str(artifact_dir))
-
+    zip_path = shutil.make_archive(str(art_dir), 'zip', root_dir=str(art_dir))
     return FileResponse(
-        path=str(zip_path),
+        path=zip_path,
         filename=f"{cfg['experimentName']}-artifacts.zip",
         media_type="application/zip"
     )
 
 
 @app.websocket("/ws/logs/container/{container_id}")
-async def websocket_logs_container(ws: WebSocket, container_id: str):
+async def websocket_logs(ws: WebSocket, container_id: str):
     await ws.accept()
     proc = subprocess.Popen(
         ["docker", "logs", "-f", container_id],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
     )
+    stop = threading.Event()
     loop = asyncio.get_running_loop()
-    stop_event = threading.Event()
 
-    def forward_logs():
-        for line in proc.stdout:
-            if stop_event.is_set():
+    def forward():
+        for ln in proc.stdout:
+            if stop.is_set():
                 break
-            asyncio.run_coroutine_threadsafe(ws.send_text(line.rstrip("\n")), loop)
+            asyncio.run_coroutine_threadsafe(ws.send_text(ln.rstrip("\n")), loop)
         proc.stdout.close()
 
-    thread = threading.Thread(target=forward_logs, daemon=True)
+    thread = threading.Thread(target=forward, daemon=True)
     thread.start()
-    deadline = time.time() + 600  # 10 minutes
+    deadline = time.time() + 600
 
     try:
         while True:
@@ -228,7 +207,7 @@ async def websocket_logs_container(ws: WebSocket, container_id: str):
     except WebSocketDisconnect:
         pass
     finally:
-        stop_event.set()
+        stop.set()
         proc.terminate()
         thread.join()
         try:
