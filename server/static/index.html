@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Experiment Controller</title>
+    <style>
+        body { font-family: sans-serif; margin: 20px; }
+        select, button, input { margin: 5px; padding: 5px; }
+        #logs { white-space: pre-wrap; background: #111; color: #0f0; padding: 10px; height: 400px; overflow-y: scroll; display: none; }
+        #actionsSection { display: none; }
+    </style>
+</head>
+<body>
+    <h1>Experiment Controller</h1>
+
+    <div>
+        <label>Select Experiment:</label>
+        <select id="experimentSelect"></select>
+        <button onclick="startExperiment()">Start</button>
+        <button onclick="stopExperiment()">Force Stop</button>
+    </div>
+
+    <div id="actionsSection">
+        <h2>Status: <span id="status">idle</span></h2>
+        <h2>Logs</h2>
+        <div id="logs"></div>
+    </div>
+
+    <script src="main.js"></script>
+</body>
+</html>
