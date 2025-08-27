@@ -77,8 +77,7 @@ def _get_config(name: str) -> Experiment:
 def _exp_paths(name: str) -> Tuple[Experiment, Path, Optional[Path]]:
     cfg = _get_config(name)
     exp_dir = BASE_PATH / cfg.name
-    art_rel = cfg.artifacts_path.strip() or None
-    art_dir = exp_dir / art_rel if art_rel else None
+    art_dir = exp_dir / cfg.artifacts_path.strip() if cfg.artifacts_path.strip() else None
     return cfg, exp_dir, art_dir
 
 
@@ -192,11 +191,13 @@ def remove_container(req: NameRequest):
 @app.get("/artifacts/{experiment_name}", summary="Download experiment artifacts")
 def download_artifacts(experiment_name: str):
     cfg, _, art_dir = _exp_paths(experiment_name)
+
     if not art_dir:
         raise HTTPException(
             status_code=404,
-            detail=f"No artifacts_path configured for experiment '{experiment_name}'"
+            detail=f"No artifacts_path configured or artifacts not found for experiment '{experiment_name}'"
         )
+
     if not art_dir.exists() or not art_dir.is_dir():
         raise HTTPException(
             status_code=404,
