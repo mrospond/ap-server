@@ -1,6 +1,7 @@
 import os
 import signal
 import subprocess
+import shutil
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -10,9 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-import asyncio, threading
-import time
-import platform
+import asyncio, threading, time, platform
 
 # --- Experiment Configuration ---
 EXPERIMENTS: List[Dict[str, str]] = [
@@ -20,19 +19,22 @@ EXPERIMENTS: List[Dict[str, str]] = [
         "experimentName": "analysing_pii_leakage",
         "ref": "https://arxiv.org/abs/2302.00539",
         "code": "https://github.com/microsoft/analysing_pii_leakage",
-        "entrypoint": "hello.py"
+        "entrypoint": "hello.py",
+        "artifacts_path": ""
     },
     {
         "experimentName": "LM_PersonalInfoLeak",
         "ref": "https://arxiv.org/abs/2205.12628",
         "code": "https://github.com/jeffhj/LM_PersonalInfoLeak",
-        "entrypoint": "python main.py"
+        "entrypoint": "python main.py",
+        "artifacts_path": ""
     },
     {
         "experimentName": "test",
         "ref": "https://arxiv.org/abs/2205.12628",
         "code": "https://github.com/jeffhj/LM_PersonalInfoLeak",
-        "entrypoint": ""
+        "entrypoint": "",
+        "artifacts_path": "results"
     }
 ]
 
@@ -42,7 +44,7 @@ LOGS_PATH.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title="Docker Experiment Manager")
 
-# Enable CORS so frontend can fetch /experiments
+# Enable CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -54,21 +56,21 @@ app.add_middleware(
 # Serve static files
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
+
 @app.get("/", include_in_schema=False)
 def root():
     return RedirectResponse(url="/static/index.html")
+
 
 @app.get("/logs", include_in_schema=False)
 def logs_page():
     return FileResponse("static/logs.html")
 
 
-# --- Request Model ---
 class NameRequest(BaseModel):
     experiment_name: str
 
 
-# --- Internal Helpers ---
 def _get_experiment_config(name: str) -> Dict[str, str]:
     for cfg in EXPERIMENTS:
         if cfg["experimentName"] == name:
@@ -98,7 +100,6 @@ def _container_name(name: str) -> str:
     return name.replace("_", "-") + "-container"
 
 
-# --- API Endpoints ---
 @app.get("/experiments", summary="List all experiments")
 def list_experiments():
     return {"experiments": [cfg["experimentName"] for cfg in EXPERIMENTS]}
@@ -109,7 +110,6 @@ def build_image(req: NameRequest):
     dockerfile = "Dockerfile"
     if platform.machine() == "aarch64":
         dockerfile += ".arm64"
-    print(dockerfile)
     cfg = _get_experiment_config(req.experiment_name)
     exp_dir = EXPERIMENTS_PATH / cfg["experimentName"]
     if not (exp_dir / dockerfile).exists():
@@ -133,29 +133,20 @@ def build_image(req: NameRequest):
 
 @app.post("/run", summary="Run container for experiment")
 def run_container(req: NameRequest):
-    """
-    Run a detached container for an experiment.
-    - Removes any existing container with the same name.
-    - Mounts the experiment directory into /app (matching Dockerfile WORKDIR).
-    - Uses the image's ENTRYPOINT (python) to run the specified script.
-    """
     cfg = _get_experiment_config(req.experiment_name)
     exp_dir = EXPERIMENTS_PATH / cfg["experimentName"]
     tag = cfg["experimentName"].lower().replace("_", "-")
     cname = _container_name(cfg["experimentName"])
 
-    # Remove any existing container
+    # Remove existing container if any
     try:
         _run_cli(["docker", "inspect", cname])
         _run_cli(["docker", "rm", "-f", cname])
     except HTTPException:
         pass
 
-    # Mount experiment dir to /app and set workdir
     volume_spec = f"{exp_dir}:/app"
     workdir = "/app"
-
-    # Build command: rely on ENTRYPOINT ["python"]
     cmd = [
         "docker", "run",
         "--name", cname,
@@ -164,11 +155,8 @@ def run_container(req: NameRequest):
         "--workdir", workdir,
         tag
     ]
-
-    # Append script or args (from entrypoint field)
     entry = cfg.get("entrypoint", "").strip()
     if entry:
-        # e.g. entry = "hello.py" or "hello.py --flag"
         cmd += entry.split()
 
     cid = _run_cli(cmd).strip()
@@ -182,21 +170,38 @@ def remove_container(req: NameRequest):
     return {"removed": cname}
 
 
+@app.get("/artifacts/{experiment_name}", summary="Download experiment artifacts")
+def download_artifacts(experiment_name: str):
+    cfg = _get_experiment_config(experiment_name)
+    artifact_rel = cfg.get("artifacts_path", "").strip()
+    if not artifact_rel:
+        raise HTTPException(status_code=404, detail="No artifacts_path configured")
+
+    # **Correctly resolve artifacts directory under each experiment**
+    artifact_dir = EXPERIMENTS_PATH / cfg["experimentName"] / artifact_rel
+    if not artifact_dir.exists() or not artifact_dir.is_dir():
+        raise HTTPException(status_code=404, detail=f"Artifacts for '{experiment_name}' not found")
+
+    # Create zip file alongside the directory
+    zip_path = artifact_dir.with_suffix(".zip")
+    shutil.make_archive(str(artifact_dir), 'zip', root_dir=str(artifact_dir))
+
+    return FileResponse(
+        path=str(zip_path),
+        filename=f"{cfg['experimentName']}-artifacts.zip",
+        media_type="application/zip"
+    )
+
+
 @app.websocket("/ws/logs/container/{container_id}")
 async def websocket_logs_container(ws: WebSocket, container_id: str):
-    """
-    Stream Docker logs for up to 10 minutes, then close.
-    """
     await ws.accept()
-
-    # Launch 'docker logs -f'
     proc = subprocess.Popen(
         ["docker", "logs", "-f", container_id],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
     )
-
     loop = asyncio.get_running_loop()
     stop_event = threading.Event()
 
@@ -209,36 +214,26 @@ async def websocket_logs_container(ws: WebSocket, container_id: str):
 
     thread = threading.Thread(target=forward_logs, daemon=True)
     thread.start()
-
-    # Compute deadline
-    deadline = time.time() + 600  # 10 minutes from now
+    deadline = time.time() + 600  # 10 minutes
 
     try:
         while True:
-            # Wait up to 1 second for a ping from client (or a timeout)
             try:
                 await asyncio.wait_for(ws.receive_text(), timeout=1.0)
             except asyncio.TimeoutError:
                 pass
-
             if time.time() >= deadline:
                 await ws.send_text("[server] session timeout after 10 minutes")
                 break
-
     except WebSocketDisconnect:
-        # client closed
         pass
     finally:
-        # Clean up subprocess and thread
         stop_event.set()
         proc.terminate()
         thread.join()
-
-        # Try closing the WebSocket but ignore duplicate-close errors
         try:
             await ws.close()
         except RuntimeError:
-            # Already closed by client or framework
             pass
 
 

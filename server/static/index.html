@@ -23,7 +23,7 @@
       <li><span class="status-ok">Build</span> an image first by clicking <em>Build</em>.</li>
       <li>Once build succeeds, click <em>Run</em> to start the container.</li>
       <li>If <em>Run</em> returns no errors, you can inspect logs via <em>View Logs</em>.</li>
-      <li>If you see errors during build or run, rebuild the image or rerun the container.</li>
+      <li>Click <em>Download Artifacts</em> to fetch the zipped outputs for the selected experiment.</li>
     </ol>
   </div>
 
@@ -34,6 +34,7 @@
     <button id="btnRun">Run</button>
     <button id="btnRemove">Remove</button>
     <button id="btnLogs">View Logs</button>
+    <button id="btnDownload">Download Artifacts</button>
   </div>
 
   <h2>Output</h2>
@@ -64,7 +65,6 @@
       })
       .catch(err => log("Error loading experiments: " + err, "error"));
 
-    // JSON POST helper with status feedback
     function postJson(path, body) {
       log(`POST ${path} ${JSON.stringify(body)}`);
       return fetch(`${server}${path}`, {
@@ -89,7 +89,6 @@
       });
     }
 
-    // Build: stream text with status detection
     function doBuild(exp) {
       output.textContent = "";
       log(`Streaming build logs for ${exp}...`);
@@ -139,6 +138,17 @@
       const container = exp.replace(/_/g, "-") + "-container";
       const wsUrl = `ws://${window.location.hostname}:8000/ws/logs/container/${container}`;
       window.open(`logs.html?ws=${encodeURIComponent(wsUrl)}`, "_blank");
+    };
+
+    document.getElementById("btnDownload").onclick = () => {
+      const exp = expSelect.value;
+      const url = `${server}/artifacts/${encodeURIComponent(exp)}`;
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${exp}-artifacts.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
     };
   </script>
 </body>
