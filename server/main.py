@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import asyncio, threading
 import time
+import platform
 
 # --- Experiment Configuration ---
 EXPERIMENTS: List[Dict[str, str]] = [
@@ -105,13 +106,17 @@ def list_experiments():
 
 @app.post("/build", summary="Build Docker image (streaming logs)")
 def build_image(req: NameRequest):
+    dockerfile = "Dockerfile"
+    if platform.machine() == "aarch64":
+        dockerfile += ".arm64"
+    print(dockerfile)
     cfg = _get_experiment_config(req.experiment_name)
     exp_dir = EXPERIMENTS_PATH / cfg["experimentName"]
-    if not (exp_dir / "Dockerfile").exists():
-        raise HTTPException(status_code=404, detail="Dockerfile not found")
+    if not (exp_dir / dockerfile).exists():
+        raise HTTPException(status_code=404, detail=f"{dockerfile} not found")
     tag = cfg["experimentName"].lower().replace("_", "-")
     proc = subprocess.Popen(
-        ["docker", "build", "-t", tag, "."],
+        ["docker", "build", "-t", tag, "-f", dockerfile, "."],
         cwd=str(exp_dir),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,

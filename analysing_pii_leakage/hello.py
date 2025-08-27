@@ -1,5 +1,6 @@
 import time
+import platform
 
 while True:
-    print("Hello from Python!")
-    time.sleep(2)
+    print(f"Hello from {platform.machine()}!")
+    time.sleep(1)

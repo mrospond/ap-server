@@ -12,21 +12,20 @@ JSON_HEADER = -H "Content-Type: application/json"
 
 help:
 	@echo "Usage:"
-	@echo "  make get"
-	@echo "  make build-<experiment_name>"
-	@echo "  make run-<experiment_name>"
-	@echo "  make remove-<experiment_name>"
-	@echo "  make logs-<experiment_name>"
+	@echo "  make get\t\t\t:Get available experiments"
+	@echo "  make build-<experiment_name>\t:Build docker image"
+	@echo "  make run-<experiment_name>\t:Run docker container"
+	@echo "  make remove-<experiment_name>\t:Remove docker container"
+	@echo "  make logs-<experiment_name>\t:Stream docker logs"
 
 get:
-	@echo "Availavle experiments:"
-	curl -s $(SERVER)/experiments | jq
+	@curl -s $(SERVER)/experiments | jq
 
 build-%:
 	@echo "Building image for experiment '$*'..."
 	curl -s -X POST $(SERVER)/build \
 	     $(JSON_HEADER) \
-	     -d '{"experiment_name":"'$*'"}' | jq .
+	     -d '{"experiment_name":"'$*'"}'
 
 run-%:
 	@echo "Running container for experiment '$*'..."
@@ -42,4 +41,4 @@ remove-%:
 
 logs-%:
 	@echo "To stream logs for '$*', connect via WebSocket:"
-	@echo "  wscat -c ws://localhost:8000/ws/logs/$*"
+	@echo "\twscat -c ws://localhost:8000/ws/logs/$*"
