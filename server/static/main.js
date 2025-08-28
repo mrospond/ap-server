@@ -1,4 +1,5 @@
-const server = "http://localhost:8000";
+// const server = "http://localhost:8000";
+const server = `${window.location.protocol}//${window.location.hostname}:${window.location.port}`;
 const expSelect = document.getElementById("expSelect");
 const expConfig = document.getElementById("expConfig");
 const output = document.getElementById("output");
