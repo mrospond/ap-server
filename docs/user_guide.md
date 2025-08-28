@@ -25,7 +25,7 @@ It is intended for anyone who wants to run controlled experiments with consisten
 1. **Clone the repository:**
 ```
 git clone <your-repo-url>
-cd ap-llm-bench/server
+cd <repo-name>/server
 ```
 
 2. **Install dependencies:**
@@ -63,17 +63,17 @@ from models import Experiment
 
 EXPERIMENTS = [
     Experiment(
-    name="analysing_pii_leakage",
-    ref="https://arxiv.org/abs/2302.00539",
-    code="https://github.com/microsoft/analysing_pii_leakage",
-    entrypoint="hello.py hello world 123", # NOTE this is an example
-    artifacts_path="results",
+      name="analysing_pii_leakage",
+      ref="https://arxiv.org/abs/2302.00539",
+      code="https://github.com/microsoft/analysing_pii_leakage",
+      entrypoint="hello.py hello world 123", # NOTE this is an example
+      artifacts_path="results",
     ),
     Experiment(
-    name="LM_PersonalInfoLeak",
-    ref="https://arxiv.org/abs/2205.12628",
-    code="https://github.com/jeffhj/LM_PersonalInfoLeak",
-    entrypoint="main.py",
+      name="LM_PersonalInfoLeak",
+      ref="https://arxiv.org/abs/2205.12628",
+      code="https://github.com/jeffhj/LM_PersonalInfoLeak",
+      entrypoint="main.py",
     ),
 ]
 ```
@@ -81,7 +81,7 @@ EXPERIMENTS = [
 
 - `name`: name of the directory with experiment source code, this directory must contain a Dockerfile.  
 - `ref`: e.g. arXiv link.  
-- `code`: source code reference repository.  
+- `code`: source code (reference repository).  
 - `entrypoint`: command executed as docker `--entrypoint` parameter when running container.  
 - `artifacts_path`: directory containing results to export (relative to `name` directory).  
 
