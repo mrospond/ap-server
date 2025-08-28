@@ -1,1 +1,0 @@
-curl http://10.116.20.172:8000/experiments

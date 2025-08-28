@@ -1,10 +1,3 @@
-# Makefile for testing Docker Experiment Manager API
-# Usage examples:
-#   make build-analysing_pii_leakage
-#   make run-analysing_pii_leakage
-#   make remove-analysing_pii_leakage
-#   make logs-analysing_pii_leakage
-
 SERVER ?= http://localhost:8000
 JSON_HEADER = -H "Content-Type: application/json"
 

@@ -91,12 +91,10 @@ btnLogs.onclick     = () => {
 };
 btnDownload.onclick = () => {
   clearOutput();
-  const a = document.createElement("a");
-  a.href = `${server}/artifacts/${encodeURIComponent(expSelect.value)}`;
-  a.download = "";
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
+  const url = `${server}/artifacts/${encodeURIComponent(expSelect.value)}`;
+  // Open in new window/tab so errors (404) show there without navigating away
+  window.open(url, "_blank");
 };
+
 
 load().catch(e => log(e.message));
