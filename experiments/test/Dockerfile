@@ -1,4 +1,9 @@
-# test dockerfile for x86
-FROM busybox:1.36
+FROM python:3.12-slim
 
-CMD sh -c "while true; do echo 'test $(uname -m)'; sleep 2; done"
+WORKDIR /app
+COPY requirements.txt .
+
+RUN pip install --upgrade pip \
+    && pip install -r requirements.txt
+
+ENTRYPOINT ["python", "-u"]

@@ -1,5 +1,7 @@
 from pydantic import BaseModel
 
+# TODO: It would be nice to have these fields validated
+
 # Models
 class Experiment(BaseModel):
     name: str
